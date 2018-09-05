@@ -53,6 +53,8 @@
 
 #include "opencv2/core/bufferpool.hpp"
 
+#include <type_traits>
+
 namespace cv
 {
 
@@ -61,6 +63,8 @@ namespace cv
 
 enum { ACCESS_READ=1<<24, ACCESS_WRITE=1<<25,
     ACCESS_RW=3<<24, ACCESS_MASK=ACCESS_RW, ACCESS_FAST=1<<26 };
+
+CV__DEBUG_NS_BEGIN
 
 class CV_EXPORTS _OutputArray;
 
@@ -73,8 +77,8 @@ It is defined as:
     typedef const _InputArray& InputArray;
 @endcode
 where _InputArray is a class that can be constructed from `Mat`, `Mat_<T>`, `Matx<T, m, n>`,
-`std::vector<T>`, `std::vector<std::vector<T> >` or `std::vector<Mat>`. It can also be constructed
-from a matrix expression.
+`std::vector<T>`, `std::vector<std::vector<T> >`, `std::vector<Mat>`, `std::vector<Mat_<T> >`,
+`UMat`, `std::vector<UMat>` or `double`. It can also be constructed from a matrix expression.
 
 Since this is mostly implementation-level class, and its interface may change in future versions, we
 do not describe it in details. There are a few key things, though, that should be kept in mind:
@@ -142,6 +146,12 @@ synonym is needed to generate Python/Java etc. wrappers properly. At the functio
 level their use is similar, but _InputArray::getMat(idx) should be used to get header for the
 idx-th component of the outer vector and _InputArray::size().area() should be used to find the
 number of components (vectors/matrices) of the outer vector.
+
+In general, type support is limited to cv::Mat types. Other types are forbidden.
+But in some cases we need to support passing of custom non-general Mat types, like arrays of cv::KeyPoint, cv::DMatch, etc.
+This data is not intented to be interpreted as an image data, or processed somehow like regular cv::Mat.
+To pass such custom type use rawIn() / rawOut() / rawInOut() wrappers.
+Custom type is wrapped as Mat-compatible `CV_8UC<N>` values (N = sizeof(T), N <= CV_CN_MAX).
  */
 class CV_EXPORTS _InputArray
 {
@@ -165,7 +175,9 @@ public:
         UMAT              =10 << KIND_SHIFT,
         STD_VECTOR_UMAT   =11 << KIND_SHIFT,
         STD_BOOL_VECTOR   =12 << KIND_SHIFT,
-        STD_VECTOR_CUDA_GPU_MAT = 13 << KIND_SHIFT
+        STD_VECTOR_CUDA_GPU_MAT = 13 << KIND_SHIFT,
+        STD_ARRAY         =14 << KIND_SHIFT,
+        STD_ARRAY_MAT     =15 << KIND_SHIFT
     };
 
     _InputArray();
@@ -177,6 +189,7 @@ public:
     template<typename _Tp> _InputArray(const std::vector<_Tp>& vec);
     _InputArray(const std::vector<bool>& vec);
     template<typename _Tp> _InputArray(const std::vector<std::vector<_Tp> >& vec);
+    _InputArray(const std::vector<std::vector<bool> >&) = delete;  // not supported
     template<typename _Tp> _InputArray(const std::vector<Mat_<_Tp> >& vec);
     template<typename _Tp> _InputArray(const _Tp* vec, int n);
     template<typename _Tp, int m, int n> _InputArray(const Matx<_Tp, m, n>& matx);
@@ -188,6 +201,12 @@ public:
     template<typename _Tp> _InputArray(const cudev::GpuMat_<_Tp>& m);
     _InputArray(const UMat& um);
     _InputArray(const std::vector<UMat>& umv);
+
+    template<typename _Tp, std::size_t _Nm> _InputArray(const std::array<_Tp, _Nm>& arr);
+    template<std::size_t _Nm> _InputArray(const std::array<Mat, _Nm>& arr);
+
+    template<typename _Tp> static _InputArray rawIn(const std::vector<_Tp>& vec);
+    template<typename _Tp, std::size_t _Nm> static _InputArray rawIn(const std::array<_Tp, _Nm>& arr);
 
     Mat getMat(int idx=-1) const;
     Mat getMat_(int idx=-1) const;
@@ -226,6 +245,7 @@ public:
     bool isUMatVector() const;
     bool isMatx() const;
     bool isVector() const;
+    bool isGpuMat() const;
     bool isGpuMatVector() const;
     ~_InputArray();
 
@@ -291,8 +311,9 @@ public:
     _OutputArray(cuda::HostMem& cuda_mem);
     template<typename _Tp> _OutputArray(cudev::GpuMat_<_Tp>& m);
     template<typename _Tp> _OutputArray(std::vector<_Tp>& vec);
-    _OutputArray(std::vector<bool>& vec);
+    _OutputArray(std::vector<bool>& vec) = delete;  // not supported
     template<typename _Tp> _OutputArray(std::vector<std::vector<_Tp> >& vec);
+    _OutputArray(std::vector<std::vector<bool> >&) = delete;  // not supported
     template<typename _Tp> _OutputArray(std::vector<Mat_<_Tp> >& vec);
     template<typename _Tp> _OutputArray(Mat_<_Tp>& m);
     template<typename _Tp> _OutputArray(_Tp* vec, int n);
@@ -316,6 +337,14 @@ public:
     _OutputArray(const UMat& m);
     _OutputArray(const std::vector<UMat>& vec);
 
+    template<typename _Tp, std::size_t _Nm> _OutputArray(std::array<_Tp, _Nm>& arr);
+    template<typename _Tp, std::size_t _Nm> _OutputArray(const std::array<_Tp, _Nm>& arr);
+    template<std::size_t _Nm> _OutputArray(std::array<Mat, _Nm>& arr);
+    template<std::size_t _Nm> _OutputArray(const std::array<Mat, _Nm>& arr);
+
+    template<typename _Tp> static _OutputArray rawOut(std::vector<_Tp>& vec);
+    template<typename _Tp, std::size_t _Nm> static _OutputArray rawOut(std::array<_Tp, _Nm>& arr);
+
     bool fixedSize() const;
     bool fixedType() const;
     bool needed() const;
@@ -335,6 +364,9 @@ public:
 
     void assign(const UMat& u) const;
     void assign(const Mat& m) const;
+
+    void assign(const std::vector<UMat>& v) const;
+    void assign(const std::vector<Mat>& v) const;
 };
 
 
@@ -350,7 +382,7 @@ public:
     _InputOutputArray(cuda::HostMem& cuda_mem);
     template<typename _Tp> _InputOutputArray(cudev::GpuMat_<_Tp>& m);
     template<typename _Tp> _InputOutputArray(std::vector<_Tp>& vec);
-    _InputOutputArray(std::vector<bool>& vec);
+    _InputOutputArray(std::vector<bool>& vec) = delete;  // not supported
     template<typename _Tp> _InputOutputArray(std::vector<std::vector<_Tp> >& vec);
     template<typename _Tp> _InputOutputArray(std::vector<Mat_<_Tp> >& vec);
     template<typename _Tp> _InputOutputArray(Mat_<_Tp>& m);
@@ -374,7 +406,25 @@ public:
     template<typename _Tp, int m, int n> _InputOutputArray(const Matx<_Tp, m, n>& matx);
     _InputOutputArray(const UMat& m);
     _InputOutputArray(const std::vector<UMat>& vec);
+
+    template<typename _Tp, std::size_t _Nm> _InputOutputArray(std::array<_Tp, _Nm>& arr);
+    template<typename _Tp, std::size_t _Nm> _InputOutputArray(const std::array<_Tp, _Nm>& arr);
+    template<std::size_t _Nm> _InputOutputArray(std::array<Mat, _Nm>& arr);
+    template<std::size_t _Nm> _InputOutputArray(const std::array<Mat, _Nm>& arr);
+
+    template<typename _Tp> static _InputOutputArray rawInOut(std::vector<_Tp>& vec);
+    template<typename _Tp, std::size_t _Nm> _InputOutputArray rawInOut(std::array<_Tp, _Nm>& arr);
+
 };
+
+/** Helper to wrap custom types. @see InputArray */
+template<typename _Tp> static inline _InputArray rawIn(_Tp& v);
+/** Helper to wrap custom types. @see InputArray */
+template<typename _Tp> static inline _OutputArray rawOut(_Tp& v);
+/** Helper to wrap custom types. @see InputArray */
+template<typename _Tp> static inline _InputOutputArray rawInOut(_Tp& v);
+
+CV__DEBUG_NS_END
 
 typedef const _InputArray& InputArray;
 typedef InputArray InputArrayOfArrays;
@@ -473,7 +523,9 @@ struct CV_EXPORTS UMatData
 {
     enum { COPY_ON_MAP=1, HOST_COPY_OBSOLETE=2,
         DEVICE_COPY_OBSOLETE=4, TEMP_UMAT=8, TEMP_COPIED_UMAT=24,
-        USER_ALLOCATED=32, DEVICE_MEM_MAPPED=64};
+        USER_ALLOCATED=32, DEVICE_MEM_MAPPED=64,
+        ASYNC_CLEANUP=128
+    };
     UMatData(const MatAllocator* allocator);
     ~UMatData();
 
@@ -508,21 +560,14 @@ struct CV_EXPORTS UMatData
 };
 
 
-struct CV_EXPORTS UMatDataAutoLock
-{
-    explicit UMatDataAutoLock(UMatData* u);
-    ~UMatDataAutoLock();
-    UMatData* u;
-};
-
-
 struct CV_EXPORTS MatSize
 {
     explicit MatSize(int* _p);
+    int dims() const;
     Size operator()() const;
     const int& operator[](int i) const;
     int& operator[](int i);
-    operator const int*() const;
+    operator const int*() const;  // TODO OpenCV 4.0: drop this
     bool operator == (const MatSize& sz) const;
     bool operator != (const MatSize& sz) const;
 
@@ -544,11 +589,11 @@ protected:
     MatStep& operator = (const MatStep&);
 };
 
-/** @example cout_mat.cpp
+/** @example samples/cpp/cout_mat.cpp
 An example demonstrating the serial out capabilities of cv::Mat
 */
 
- /** @brief n-dimensional dense array class
+ /** @brief n-dimensional dense array class \anchor CVMat_Details
 
 The class Mat represents an n-dimensional dense numerical single-channel or multi-channel array. It
 can be used to store real or complex-valued vectors and matrices, grayscale or color images, voxel
@@ -660,7 +705,7 @@ sub-matrices.
 
 - Use MATLAB-style array initializers, zeros(), ones(), eye(), for example:
 @code
-    // create a double-precision identity martix and add it to M.
+    // create a double-precision identity matrix and add it to M.
     M += Mat::eye(M.rows, M.cols, CV_64F);
 @endcode
 
@@ -693,7 +738,7 @@ If you need to process a whole row of a 2D array, the most efficient way is to g
 the row first, and then just use the plain C operator [] :
 @code
     // compute sum of positive matrix elements
-    // (assuming that M isa double-precision matrix)
+    // (assuming that M is a double-precision matrix)
     double sum=0;
     for(int i = 0; i < M.rows; i++)
     {
@@ -736,6 +781,8 @@ Finally, there are STL-style iterators that are smart enough to skip gaps betwee
 @endcode
 The matrix iterators are random-access iterators, so they can be passed to any STL algorithm,
 including std::sort().
+
+@note Matrix Expressions and arithmetic see MatExpr
 */
 class CV_EXPORTS Mat
 {
@@ -955,6 +1002,19 @@ public:
 
     /** @overload
     */
+    template<typename _Tp, typename = typename std::enable_if<std::is_arithmetic<_Tp>::value>::type>
+    explicit Mat(const std::initializer_list<_Tp> list);
+
+    /** @overload
+    */
+    template<typename _Tp> explicit Mat(const std::initializer_list<int> sizes, const std::initializer_list<_Tp> list);
+
+    /** @overload
+    */
+    template<typename _Tp, size_t _Nm> explicit Mat(const std::array<_Tp, _Nm>& arr, bool copyData=false);
+
+    /** @overload
+    */
     template<typename _Tp, int n> explicit Mat(const Vec<_Tp, n>& vec, bool copyData=true);
 
     /** @overload
@@ -1079,10 +1139,33 @@ public:
     single-column matrix. Similarly to Mat::row and Mat::col, this is an O(1) operation.
     @param d index of the diagonal, with the following values:
     - `d=0` is the main diagonal.
-    - `d>0` is a diagonal from the lower half. For example, d=1 means the diagonal is set
+    - `d<0` is a diagonal from the lower half. For example, d=-1 means the diagonal is set
       immediately below the main one.
-    - `d<0` is a diagonal from the upper half. For example, d=-1 means the diagonal is set
+    - `d>0` is a diagonal from the upper half. For example, d=1 means the diagonal is set
       immediately above the main one.
+    For example:
+    @code
+        Mat m = (Mat_<int>(3,3) <<
+                    1,2,3,
+                    4,5,6,
+                    7,8,9);
+        Mat d0 = m.diag(0);
+        Mat d1 = m.diag(1);
+        Mat d_1 = m.diag(-1);
+    @endcode
+    The resulting matrices are
+    @code
+     d0 =
+       [1;
+        5;
+        9]
+     d1 =
+       [2;
+        6]
+     d_1 =
+       [4;
+        8]
+    @endcode
      */
     Mat diag(int d=0) const;
 
@@ -1098,7 +1181,7 @@ public:
     The method creates a full copy of the array. The original step[] is not taken into account. So, the
     array copy is a continuous array occupying total()*elemSize() bytes.
      */
-    Mat clone() const;
+    Mat clone() const CV_NODISCARD;
 
     /** @brief Copies the matrix to another one.
 
@@ -1120,8 +1203,8 @@ public:
     /** @overload
     @param m Destination matrix. If it does not have a proper size or type before the operation, it is
     reallocated.
-    @param mask Operation mask. Its non-zero elements indicate which matrix elements need to be copied.
-    The mask has to be of type CV_8U and can have 1 or multiple channels.
+    @param mask Operation mask of the same size as \*this. Its non-zero elements indicate which matrix
+    elements need to be copied. The mask has to be of type CV_8U and can have 1 or multiple channels.
     */
     void copyTo( OutputArray m, InputArray mask ) const;
 
@@ -1157,7 +1240,8 @@ public:
 
     This is an advanced variant of the Mat::operator=(const Scalar& s) operator.
     @param value Assigned scalar converted to the actual array type.
-    @param mask Operation mask of the same size as \*this.
+    @param mask Operation mask of the same size as \*this. Its non-zero elements indicate which matrix
+    elements need to be copied. The mask has to be of type CV_8U and can have 1 or multiple channels
      */
     Mat& setTo(InputArray value, InputArray mask=noArray());
 
@@ -1189,6 +1273,9 @@ public:
 
     /** @overload */
     Mat reshape(int cn, int newndims, const int* newsz) const;
+
+    /** @overload */
+    Mat reshape(int cn, const std::vector<int>& newshape) const;
 
     /** @brief Transposes a matrix.
 
@@ -1247,7 +1334,7 @@ public:
     /** @brief Returns a zero array of the specified size and type.
 
     The method returns a Matlab-style zero array initializer. It can be used to quickly form a constant
-    array as a function parameter, part of a matrix expression, or as a matrix initializer. :
+    array as a function parameter, part of a matrix expression, or as a matrix initializer:
     @code
         Mat A;
         A = Mat::zeros(3, 3, CV_32F);
@@ -1283,6 +1370,8 @@ public:
     The above operation does not form a 100x100 matrix of 1's and then multiply it by 3. Instead, it
     just remembers the scale factor (3 in this case) and use it when actually invoking the matrix
     initializer.
+    @note In case of multi-channels type, only the first channel will be initialized with 1's, the
+    others will be set to 0's.
     @param rows Number of rows.
     @param cols Number of columns.
     @param type Created matrix type.
@@ -1310,6 +1399,8 @@ public:
         // make a 4x4 diagonal matrix with 0.1's on the diagonal.
         Mat A = Mat::eye(4, 4, CV_32F)*0.1;
     @endcode
+    @note In case of multi-channels type, identity matrix will be initialized only for the first channel,
+    the others will be set to 0's
     @param rows Number of rows.
     @param cols Number of columns.
     @param type Created matrix type.
@@ -1402,7 +1493,7 @@ public:
      */
     void release();
 
-    //! deallocates the matrix data
+    //! internal use function, consider to use 'release' method instead; deallocates the matrix data
     void deallocate();
     //! internal use function; properly re-allocates _size, _step arrays
     void copySize(const Mat& m);
@@ -1415,6 +1506,14 @@ public:
     @param sz Number of rows.
      */
     void reserve(size_t sz);
+
+    /** @brief Reserves space for the certain number of bytes.
+
+    The method reserves space for sz bytes. If the matrix already has enough space to store sz bytes,
+    nothing happens. If matrix has to be reallocated its previous content could be lost.
+    @param sz Number of bytes.
+    */
+    void reserveBuffer(size_t sz);
 
     /** @brief Changes the number of matrix rows.
 
@@ -1447,6 +1546,11 @@ public:
     @param elem Added element(s).
     */
     template<typename _Tp> void push_back(const Mat_<_Tp>& elem);
+
+    /** @overload
+    @param elem Added element(s).
+    */
+    template<typename _Tp> void push_back(const std::vector<_Tp>& elem);
 
     /** @overload
     @param m Added line(s).
@@ -1542,6 +1646,8 @@ public:
     template<typename _Tp, int n> operator Vec<_Tp, n>() const;
     template<typename _Tp, int m, int n> operator Matx<_Tp, m, n>() const;
 
+    template<typename _Tp, std::size_t _Nm> operator std::array<_Tp, _Nm>() const;
+
     /** @brief Reports whether the matrix is continuous or not.
 
     The method returns true if the matrix elements are stored continuously without gaps at the end of
@@ -1574,7 +1680,7 @@ public:
                         inv_scale = 1.f/alpha_scale;
 
             CV_Assert( src1.type() == src2.type() &&
-                       src1.type() == CV_MAKETYPE(DataType<T>::depth, 4) &&
+                       src1.type() == CV_MAKETYPE(traits::Depth<T>::value, 4) &&
                        src1.size() == src2.size());
             Size size = src1.size();
             dst.create(size, src1.type());
@@ -1684,7 +1790,33 @@ public:
      */
     size_t total() const;
 
-    //! returns N if the matrix is 1-channel (N x ptdim) or ptdim-channel (1 x N) or (N x 1); negative number otherwise
+    /** @brief Returns the total number of array elements.
+
+     The method returns the number of elements within a certain sub-array slice with startDim <= dim < endDim
+     */
+    size_t total(int startDim, int endDim=INT_MAX) const;
+
+    /**
+     * @param elemChannels Number of channels or number of columns the matrix should have.
+     *                     For a 2-D matrix, when the matrix has only 1 column, then it should have
+     *                     elemChannels channels; When the matrix has only 1 channel,
+     *                     then it should have elemChannels columns.
+     *                     For a 3-D matrix, it should have only one channel. Furthermore,
+     *                     if the number of planes is not one, then the number of rows
+     *                     within every plane has to be 1; if the number of rows within
+     *                     every plane is not 1, then the number of planes has to be 1.
+     * @param depth The depth the matrix should have. Set it to -1 when any depth is fine.
+     * @param requireContinuous Set it to true to require the matrix to be continuous
+     * @return -1 if the requirement is not satisfied.
+     *         Otherwise, it returns the number of elements in the matrix. Note
+     *         that an element may have multiple channels.
+     *
+     * The following code demonstrates its usage for a 2-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-2d
+     *
+     * The following code demonstrates its usage for a 3-d matrix:
+     * @snippet snippets/core_mat_checkVector.cpp example-3d
+     */
     int checkVector(int elemChannels, int depth=-1, bool requireContinuous=true) const;
 
     /** @brief Returns a pointer to the specified matrix row.
@@ -1848,7 +1980,7 @@ public:
                         inv_scale = 1.f/alpha_scale;
 
             CV_Assert( src1.type() == src2.type() &&
-                       src1.type() == DataType<VT>::type &&
+                       src1.type() == traits::Type<VT>::value &&
                        src1.size() == src2.size());
             Size size = src1.size();
             dst.create(size, src1.type());
@@ -1891,7 +2023,7 @@ public:
 
         // first. raw pointer access.
         for (int r = 0; r < image.rows; ++r) {
-            Pixel* ptr = image.ptr<Pixel>(0, r);
+            Pixel* ptr = image.ptr<Pixel>(r, 0);
             const Pixel* ptr_end = ptr + image.cols;
             for (; ptr != ptr_end; ++ptr) {
                 ptr->x = 255;
@@ -1938,10 +2070,8 @@ public:
     /** @overload */
     template<typename _Tp, typename Functor> void forEach(const Functor& operation) const;
 
-#ifdef CV_CXX_MOVE_SEMANTICS
     Mat(Mat&& m);
     Mat& operator = (Mat&& m);
-#endif
 
     enum { MAGIC_VAL  = 0x42FF0000, AUTO_STEP = 0, CONTINUOUS_FLAG = CV_MAT_CONT_FLAG, SUBMATRIX_FLAG = CV_SUBMAT_FLAG };
     enum { MAGIC_MASK = 0xFFFF0000, TYPE_MASK = 0x00000FFF, DEPTH_MASK = 7 };
@@ -1972,6 +2102,9 @@ public:
     static MatAllocator* getDefaultAllocator();
     static void setDefaultAllocator(MatAllocator* allocator);
 
+    //! internal use method: updates the continuity flag
+    void updateContinuityFlag();
+
     //! interaction with UMat
     UMatData* u;
 
@@ -1987,7 +2120,7 @@ protected:
 
 /** @brief Template matrix class derived from Mat
 
-@code
+@code{.cpp}
     template<typename _Tp> class Mat_ : public Mat
     {
     public:
@@ -1999,7 +2132,7 @@ protected:
 The class `Mat_<_Tp>` is a *thin* template wrapper on top of the Mat class. It does not have any
 extra data fields. Nor this class nor Mat has any virtual methods. Thus, references or pointers to
 these two classes can be freely but carefully converted one to another. For example:
-@code
+@code{.cpp}
     // create a 100x100 8-bit matrix
     Mat M(100,100,CV_8U);
     // this will be compiled fine. no any data conversion will be done.
@@ -2011,7 +2144,7 @@ While Mat is sufficient in most cases, Mat_ can be more convenient if you use a 
 access operations and if you know matrix type at the compilation time. Note that
 `Mat::at(int y,int x)` and `Mat_::operator()(int y,int x)` do absolutely the same
 and run at the same speed, but the latter is certainly shorter:
-@code
+@code{.cpp}
     Mat_<double> M(20,20);
     for(int i = 0; i < M.rows; i++)
         for(int j = 0; j < M.cols; j++)
@@ -2021,7 +2154,7 @@ and run at the same speed, but the latter is certainly shorter:
     cout << E.at<double>(0,0)/E.at<double>(M.rows-1,0);
 @endcode
 To use Mat_ for multi-channel images/matrices, pass Vec as a Mat_ parameter:
-@code
+@code{.cpp}
     // allocate a 320x240 color image and fill it with green (in RGB space)
     Mat_<Vec3b> img(240, 320, Vec3b(0,255,0));
     // now draw a diagonal white line
@@ -2031,6 +2164,17 @@ To use Mat_ for multi-channel images/matrices, pass Vec as a Mat_ parameter:
     for(int i = 0; i < img.rows; i++)
         for(int j = 0; j < img.cols; j++)
             img(i,j)[2] ^= (uchar)(i ^ j);
+@endcode
+Mat_ is fully compatible with C++11 range-based for loop. For example such loop
+can be used to safely apply look-up table:
+@code{.cpp}
+void applyTable(Mat_<uchar>& I, const uchar* const table)
+{
+    for(auto& pixel : I)
+    {
+        pixel = table[pixel];
+    }
+}
 @endcode
  */
 template<typename _Tp> class Mat_ : public Mat
@@ -2055,7 +2199,7 @@ public:
     Mat_(int _ndims, const int* _sizes);
     //! n-dim array constructor that sets each matrix element to specified value
     Mat_(int _ndims, const int* _sizes, const _Tp& value);
-    //! copy/conversion contructor. If m is of different type, it's converted
+    //! copy/conversion constructor. If m is of different type, it's converted
     Mat_(const Mat& m);
     //! copy constructor
     Mat_(const Mat_& m);
@@ -2081,6 +2225,11 @@ public:
     explicit Mat_(const Point3_<typename DataType<_Tp>::channel_type>& pt, bool copyData=true);
     explicit Mat_(const MatCommaInitializer_<_Tp>& commaInitializer);
 
+    Mat_(std::initializer_list<_Tp> values);
+    explicit Mat_(const std::initializer_list<int> sizes, const std::initializer_list<_Tp> values);
+
+    template <std::size_t _Nm> explicit Mat_(const std::array<_Tp, _Nm>& arr, bool copyData=false);
+
     Mat_& operator = (const Mat& m);
     Mat_& operator = (const Mat_& m);
     //! set all the elements to s.
@@ -2105,6 +2254,8 @@ public:
     void create(Size _size);
     //! equivalent to Mat::create(_ndims, _sizes, DatType<_Tp>::type)
     void create(int _ndims, const int* _sizes);
+    //! equivalent to Mat::release()
+    void release();
     //! cross-product
     Mat_ cross(const Mat_& m) const;
     //! data type conversion
@@ -2113,7 +2264,7 @@ public:
     Mat_ row(int y) const;
     Mat_ col(int x) const;
     Mat_ diag(int d=0) const;
-    Mat_ clone() const;
+    Mat_ clone() const CV_NODISCARD;
 
     //! overridden forms of Mat::elemSize() etc.
     size_t elemSize() const;
@@ -2135,7 +2286,7 @@ public:
     static MatExpr eye(int rows, int cols);
     static MatExpr eye(Size size);
 
-    //! some more overriden methods
+    //! some more overridden methods
     Mat_& adjustROI( int dtop, int dbottom, int dleft, int dright );
     Mat_ operator()( const Range& rowRange, const Range& colRange ) const;
     Mat_ operator()( const Rect& roi ) const;
@@ -2174,12 +2325,15 @@ public:
 
     //! conversion to vector.
     operator std::vector<_Tp>() const;
+
+    //! conversion to array.
+    template<std::size_t _Nm> operator std::array<_Tp, _Nm>() const;
+
     //! conversion to Vec
     template<int n> operator Vec<typename DataType<_Tp>::channel_type, n>() const;
     //! conversion to Matx
     template<int m, int n> operator Matx<typename DataType<_Tp>::channel_type, m, n>() const;
 
-#ifdef CV_CXX_MOVE_SEMANTICS
     Mat_(Mat_&& m);
     Mat_& operator = (Mat_&& m);
 
@@ -2187,7 +2341,6 @@ public:
     Mat_& operator = (Mat&& m);
 
     Mat_(MatExpr&& e);
-#endif
 };
 
 typedef Mat_<uchar> Mat1b;
@@ -2248,6 +2401,7 @@ public:
     UMat(const UMat& m, const std::vector<Range>& ranges);
     //! builds matrix from std::vector with or without copying the data
     template<typename _Tp> explicit UMat(const std::vector<_Tp>& vec, bool copyData=false);
+
     //! builds matrix from cv::Vec; the data is copied by default
     template<typename _Tp, int n> explicit UMat(const Vec<_Tp, n>& vec, bool copyData=true);
     //! builds matrix from cv::Matx; the data is copied by default
@@ -2277,21 +2431,21 @@ public:
     UMat colRange(int startcol, int endcol) const;
     UMat colRange(const Range& r) const;
     //! ... for the specified diagonal
-    // (d=0 - the main diagonal,
-    //  >0 - a diagonal from the lower half,
-    //  <0 - a diagonal from the upper half)
+    //! (d=0 - the main diagonal,
+    //!  >0 - a diagonal from the upper half,
+    //!  <0 - a diagonal from the lower half)
     UMat diag(int d=0) const;
     //! constructs a square diagonal matrix which main diagonal is vector "d"
     static UMat diag(const UMat& d);
 
     //! returns deep copy of the matrix, i.e. the data is copied
-    UMat clone() const;
+    UMat clone() const CV_NODISCARD;
     //! copies the matrix content to "m".
     // It calls m.create(this->size(), this->type()).
     void copyTo( OutputArray m ) const;
     //! copies those matrix elements to "m" that are marked with non-zero mask elements.
     void copyTo( OutputArray m, InputArray mask ) const;
-    //! converts matrix to another datatype with optional scalng. See cvConvertScale.
+    //! converts matrix to another datatype with optional scaling. See cvConvertScale.
     void convertTo( OutputArray m, int rtype, double alpha=1, double beta=0 ) const;
 
     void assignTo( UMat& m, int type=-1 ) const;
@@ -2383,11 +2537,13 @@ public:
     //! returns N if the matrix is 1-channel (N x ptdim) or ptdim-channel (1 x N) or (N x 1); negative number otherwise
     int checkVector(int elemChannels, int depth=-1, bool requireContinuous=true) const;
 
-#ifdef CV_CXX_MOVE_SEMANTICS
     UMat(UMat&& m);
     UMat& operator = (UMat&& m);
-#endif
 
+    /*! Returns the OpenCL buffer handle on which UMat operates on.
+        The UMat instance should be kept alive during the use of the handle to prevent the buffer to be
+        returned to the OpenCV buffer pool.
+     */
     void* handle(int accessFlags) const;
     void ndoffset(size_t* ofs) const;
 
@@ -2411,6 +2567,9 @@ public:
     UMatUsageFlags usageFlags; // usage flags for allocator
     //! and the standard allocator
     static MatAllocator* getStdAllocator();
+
+    //! internal use method: updates the continuity flag
+    void updateContinuityFlag();
 
     // black-box container of UMat data
     UMatData* u;
@@ -2573,7 +2732,7 @@ public:
     SparseMat& operator = (const Mat& m);
 
     //! creates full copy of the matrix
-    SparseMat clone() const;
+    SparseMat clone() const CV_NODISCARD;
 
     //! copies all the data to the destination matrix. All the previous content of m is erased
     void copyTo( SparseMat& m ) const;
@@ -2585,11 +2744,11 @@ public:
     /*!
         @param [out] m - output matrix; if it does not have a proper size or type before the operation,
             it is reallocated
-        @param [in] rtype – desired output matrix type or, rather, the depth since the number of channels
+        @param [in] rtype - desired output matrix type or, rather, the depth since the number of channels
             are the same as the input has; if rtype is negative, the output matrix will have the
             same type as the input.
-        @param [in] alpha – optional scale factor
-        @param [in] beta – optional delta added to the scaled values
+        @param [in] alpha - optional scale factor
+        @param [in] beta - optional delta added to the scaled values
     */
     void convertTo( Mat& m, int rtype, double alpha=1, double beta=0 ) const;
 
@@ -2792,7 +2951,7 @@ public:
 
     //! the default constructor
     SparseMat_();
-    //! the full constructor equivelent to SparseMat(dims, _sizes, DataType<_Tp>::type)
+    //! the full constructor equivalent to SparseMat(dims, _sizes, DataType<_Tp>::type)
     SparseMat_(int dims, const int* _sizes);
     //! the copy constructor. If DataType<_Tp>.type != m.type(), the m elements are converted
     SparseMat_(const SparseMat& m);
@@ -2810,7 +2969,7 @@ public:
     SparseMat_& operator = (const Mat& m);
 
     //! makes full copy of the matrix. All the elements are duplicated
-    SparseMat_ clone() const;
+    SparseMat_ clone() const CV_NODISCARD;
     //! equivalent to cv::SparseMat::create(dims, _sizes, DataType<_Tp>::type)
     void create(int dims, const int* _sizes);
     //! converts sparse matrix to the old-style CvSparseMat. All the elements are copied
@@ -2863,9 +3022,7 @@ public:
     typedef const uchar** pointer;
     typedef uchar* reference;
 
-#ifndef OPENCV_NOSTL
     typedef std::random_access_iterator_tag iterator_category;
-#endif
 
     //! default constructor
     MatConstIterator();
@@ -2930,9 +3087,7 @@ public:
     typedef const _Tp* pointer;
     typedef const _Tp& reference;
 
-#ifndef OPENCV_NOSTL
     typedef std::random_access_iterator_tag iterator_category;
-#endif
 
     //! default constructor
     MatConstIterator_();
@@ -2983,9 +3138,7 @@ public:
     typedef _Tp* pointer;
     typedef _Tp& reference;
 
-#ifndef OPENCV_NOSTL
     typedef std::random_access_iterator_tag iterator_category;
-#endif
 
     //! the default constructor
     MatIterator_();
@@ -3119,9 +3272,7 @@ template<typename _Tp> class SparseMatConstIterator_ : public SparseMatConstIter
 {
 public:
 
-#ifndef OPENCV_NOSTL
     typedef std::forward_iterator_tag iterator_category;
-#endif
 
     //! the default constructor
     SparseMatConstIterator_();
@@ -3155,9 +3306,7 @@ template<typename _Tp> class SparseMatIterator_ : public SparseMatConstIterator_
 {
 public:
 
-#ifndef OPENCV_NOSTL
     typedef std::forward_iterator_tag iterator_category;
-#endif
 
     //! the default constructor
     SparseMatIterator_();

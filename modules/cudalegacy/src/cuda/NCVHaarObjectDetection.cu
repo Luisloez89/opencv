@@ -2147,8 +2147,8 @@ static NCVStatus loadFromXML(const cv::String &filename,
     haar.ClassifierSize.width = oldCascade->orig_window_size.width;
     haar.ClassifierSize.height = oldCascade->orig_window_size.height;
 
-    int stagesCound = oldCascade->count;
-    for(int s = 0; s < stagesCound; ++s) // by stages
+    int stagesCount = oldCascade->count;
+    for(int s = 0; s < stagesCount; ++s) // by stages
     {
         HaarStage64 curStage;
         curStage.setStartClassifierRootNodeOffset(static_cast<Ncv32u>(haarClassifierNodes.size()));
@@ -2388,7 +2388,7 @@ NCVStatus ncvHaarGetClassifierSize(const cv::String &filename, Ncv32u &numStages
     NCVStatus ncvStat;
 
     cv::String fext = filename.substr(filename.find_last_of(".") + 1);
-    fext = fext.toLowerCase();
+    std::transform(fext.begin(), fext.end(), fext.begin(), ::tolower);
 
     if (fext == "nvbin")
     {
@@ -2446,7 +2446,7 @@ NCVStatus ncvHaarLoadFromFile_host(const cv::String &filename,
     NCVStatus ncvStat;
 
     cv::String fext = filename.substr(filename.find_last_of(".") + 1);
-    fext = fext.toLowerCase();
+    std::transform(fext.begin(), fext.end(), fext.begin(), ::tolower);
 
     std::vector<HaarStage64> haarStages;
     std::vector<HaarClassifierNode128> haarNodes;
